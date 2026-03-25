@@ -1,0 +1,16 @@
+console_config.json
+console_history.json
+node_modules/
+package-lock.json
+commands/*
+!commands/cls.js
+!commands/exit.js
+!commands/get.js
+!commands/help.js
+!commands/mandelbrot.js
+!commands/r.js
+!commands/set.js
+!commands/unset.js
+!commands/toggle.js
+!commands/README.md
+.npmrc
