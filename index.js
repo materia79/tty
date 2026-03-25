@@ -212,6 +212,7 @@ class Console extends EventEmitter {
 		this.historyPath = options.historyPath ?? path.join(__dirname, "console_history.json");
 		this.commandsDir = options.commandsDir ?? path.join(__dirname, "commands");
 		this.maxHistoryEntries = options.maxHistoryEntries ?? 1000;
+		this.exitOnStop = options.exitOnStop ?? true;
 		const persistedConfig = this.loadConfig();
 		const persistedVariabled =
 			persistedConfig.variabled &&
@@ -268,45 +269,10 @@ class Console extends EventEmitter {
 			destroyed: false
 		};
 
-		this.screen = blessed.screen({
-			smartCSR: true,
-			fullUnicode: true,
-			dockBorders: true,
-			autoPadding: false,
-			mouse: true
-		});
-
-		this.titleBox = blessed.box({
-			parent: this.screen,
-			top: 0,
-			left: 0,
-			width: "100%",
-			height: 1,
-			mouse: true,
-			tags: false,
-			style: { fg: "black", bg: "green" }
-		});
-
-		this.bufferBox = blessed.box({
-			parent: this.screen,
-			top: 1,
-			left: 0,
-			width: "100%",
-			height: 1,
-			mouse: true,
-			tags: false,
-			style: { fg: "white", bg: "black" }
-		});
-
-		this.inputBox = blessed.box({
-			parent: this.screen,
-			bottom: 0,
-			left: 0,
-			width: "100%",
-			height: 1,
-			tags: false,
-			style: { fg: "white", bg: "blue" }
-		});
+		this.screen = null;
+		this.titleBox = null;
+		this.bufferBox = null;
+		this.inputBox = null;
 
 		this.tty = {
 			delimiter: this.state.delimiter,
@@ -355,6 +321,55 @@ class Console extends EventEmitter {
 		this.isWindowsTerminal =
 			process.platform === "win32" &&
 			Boolean(process.env.WT_SESSION || process.env.WT_PROFILE_ID);
+
+		this.installDefaultTitle();
+		this.initCommands();
+	}
+
+	initializeScreen() {
+		if (this.screen) {
+			return;
+		}
+
+		this.screen = blessed.screen({
+			smartCSR: true,
+			fullUnicode: true,
+			dockBorders: true,
+			autoPadding: false,
+			mouse: true
+		});
+
+		this.titleBox = blessed.box({
+			parent: this.screen,
+			top: 0,
+			left: 0,
+			width: "100%",
+			height: 1,
+			mouse: true,
+			tags: false,
+			style: { fg: "black", bg: "green" }
+		});
+
+		this.bufferBox = blessed.box({
+			parent: this.screen,
+			top: 1,
+			left: 0,
+			width: "100%",
+			height: 1,
+			mouse: true,
+			tags: false,
+			style: { fg: "white", bg: "black" }
+		});
+
+		this.inputBox = blessed.box({
+			parent: this.screen,
+			bottom: 0,
+			left: 0,
+			width: "100%",
+			height: 1,
+			tags: false,
+			style: { fg: "white", bg: "blue" }
+		});
 	}
 
 	configureMouseTracking() {
@@ -473,9 +488,8 @@ class Console extends EventEmitter {
 	}
 
 	start() {
+		this.initializeScreen();
 		this.ensurePersistenceFiles();
-		this.installDefaultTitle();
-		this.initCommands();
 		this.installConsoleLogWrapper();
 
 		this.screen.on("keypress", this.boundKeypress);
@@ -758,9 +772,15 @@ class Console extends EventEmitter {
 		this.flushPendingConfigSave();
 
 		this.uninstallConsoleLogWrapper();
-		this.screen.program.showCursor();
-		this.screen.destroy();
-		process.exit(0);
+		if (this.screen && this.screen.program) {
+			this.screen.program.showCursor();
+		}
+		if (this.screen) {
+			this.screen.destroy();
+		}
+		if (this.exitOnStop) {
+			process.exit(0);
+		}
 	}
 
 	installDefaultTitle() {
@@ -1319,8 +1339,8 @@ class Console extends EventEmitter {
 			return "";
 		}
 
-		this.tty.window_width = process.stdout.columns;
-		this.tty.window_height = process.stdout.rows;
+		this.tty.window_width = this.getScreenCols();
+		this.tty.window_height = this.getScreenRows();
 
 		const args = line.split(/\s+/);
 		const cmd = String(args[0] ?? "").toLowerCase();
@@ -1372,11 +1392,23 @@ class Console extends EventEmitter {
 	}
 
 	getScreenCols() {
-		return Math.max(1, this.screen.width || process.stdout.columns || 80);
+		const screenWidth = this.screen && Number.isFinite(this.screen.width)
+			? this.screen.width
+			: 0;
+		const stdoutWidth = process.stdout && Number.isFinite(process.stdout.columns)
+			? process.stdout.columns
+			: 0;
+		return Math.max(1, screenWidth || stdoutWidth || 80);
 	}
 
 	getScreenRows() {
-		return Math.max(1, this.screen.height || process.stdout.rows || 24);
+		const screenHeight = this.screen && Number.isFinite(this.screen.height)
+			? this.screen.height
+			: 0;
+		const stdoutHeight = process.stdout && Number.isFinite(process.stdout.rows)
+			? process.stdout.rows
+			: 0;
+		return Math.max(1, screenHeight || stdoutHeight || 24);
 	}
 
 	getVisibleLineCountForEntry(entry, cols) {
@@ -1535,7 +1567,7 @@ class Console extends EventEmitter {
 	}
 
 	render() {
-		if (this.state.destroyed) {
+		if (this.state.destroyed || !this.screen || !this.titleBox || !this.bufferBox || !this.inputBox) {
 			return;
 		}
 

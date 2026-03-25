@@ -61,6 +61,51 @@ global.tty = ui.tty;
 console.log("server started");
 ```
 
+## Game Server Embedding
+
+For embedded usage (for example in a game server), create one `Console` instance and assign its public context to your host object.
+
+```js
+// Assuming your game server runtime is `mp` and you want to expose the console API on `mp.tty`:
+const { Console } = require("tty-console");
+
+const consoleRuntime = new Console({
+	configPath: "./console_config.json",
+	historyPath: "./console_history.json",
+	commandsDir: "./commands",
+	exitOnStop: false
+});
+
+// Expose runtime API on host object.
+mp.tty = consoleRuntime.tty;
+
+// Optional: run commands programmatically.
+await mp.tty.parseCommand("help");
+mp.tty.writeLog("game server initialized");
+```
+
+Notes:
+
+- `new Console(...)` is safe in embedded/headless mode and does not auto-start the TUI.
+- Call `.start()` only if you actually want the terminal UI to render.
+- `exitOnStop: false` avoids terminating your host process when `stop()` is called.
+
+## Module Consumers (CJS and ESM)
+
+CommonJS:
+
+```js
+const { Console, createConsole } = require("tty-console");
+```
+
+ESM:
+
+```js
+import ttyConsole from "tty-console";
+
+const { Console, createConsole } = ttyConsole;
+```
+
 ## Command Loader
 
 At startup the console scans `commands/` for `.js` files and registers them as commands.

@@ -1,9 +1,30 @@
 {
   "name": "tty-console",
   "version": "0.1.0",
-  "private": true,
+  "description": "Terminal console runtime for Node servers with command parsing and embeddable API",
+  "private": false,
   "main": "index.js",
+  "exports": {
+    ".": {
+      "require": "./index.js",
+      "default": "./index.js"
+    }
+  },
   "type": "commonjs",
+  "files": [
+    "index.js",
+    "commands/",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "console",
+    "tty",
+    "terminal",
+    "node"
+  ],
   "scripts": {
     "start": "node index.js"
   },
