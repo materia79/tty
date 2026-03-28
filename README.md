@@ -17,6 +17,30 @@ Terminal UI console for Node 20+ server apps with:
 - Persistent AFK timeout config (`variabled.afkTimeoutSeconds`) in `console_config.json`
 - Persistent input history in `console_history.json` (last 1000 entries)
 
+## Index
+
+- [Install](#install)
+- [Run demo](#run-demo)
+- [Built-in commands](#built-in-commands)
+- [Integration](#integration)
+- [Game Server Embedding](#game-server-embedding)
+- [External Process Embedding (`embeddingExecutable` mode)](#external-process-embedding-embeddingexecutable-mode)
+	- [Configuration](#configuration)
+	- [What happens technically](#what-happens-technically)
+	- [Data flow between processes](#data-flow-between-processes)
+	- [Lifecycle and limitations](#lifecycle-and-limitations)
+	- [Environment variables in launcher mode](#environment-variables-in-launcher-mode)
+	- [Troubleshooting](#troubleshooting)
+- [RageMP embedding example (`ragemp-server.exe`)](#ragemp-embedding-example-ragemp-serverexe)
+- [Module Consumers (CJS and ESM)](#module-consumers-cjs-and-esm)
+- [Command Loader](#command-loader)
+- [Persistent Config](#persistent-config)
+- [Persistent History](#persistent-history)
+- [First Start Behavior](#first-start-behavior)
+- [Title API](#title-api)
+- [Notes](#notes)
+- [Scroll Controls](#scroll-controls)
+
 ## Install
 
 ```bash
@@ -37,6 +61,10 @@ npm start
 - `toggle timestamps` - Toggle UTC log timestamps and persist state
 - `toggle mouse` - Toggle app mouse mode (wheel scroll) vs native terminal selection/copy/paste mode
 - `toggle afk` - Toggle AFK timeout detection on/off and persist state
+- `get [filter]` - List stored `variabled.*` values (optionally filtered)
+- `set <variable> <value>` - Set and persist `variabled.<variable>`
+- `unset <variable>` - Remove and persist `variabled.<variable>`
+- `cls` - Clear output buffer
 - `mandelbrot [options]` - Draw Mandelbrot sized to visible buffer viewport (`--color` available)
 - `r <server side code>` - Evaluate code
 - `exit` - Exit console
@@ -90,6 +118,97 @@ Notes:
 - Call `.start()` only if you actually want the terminal UI to render.
 - `exitOnStop: false` avoids terminating your host process when `stop()` is called.
 
+## External Process Embedding (`embeddingExecutable` mode)
+
+This mode is different from the in-process embedding above.
+
+- In-process embedding: your host process imports this package and controls `Console` directly.
+- `embeddingExecutable` mode: `node index.js` becomes a launcher that starts another executable and bridges terminal I/O to it.
+
+Use this when your real host runtime is an external executable (for example a game server binary) and you still want this terminal UI as a front-end.
+
+### Configuration
+
+Set `embeddingExecutable` in `console_config.json`:
+
+```json
+{
+	"embeddingExecutable": "ragemp-server.exe"
+}
+```
+
+When this value is present and non-empty, running `node index.js` spawns that executable instead of starting a standalone local console session.
+
+Inside the spawned process, `EMBEDDED_NATIVE_LOG` is already set, so the launcher path is skipped to prevent recursive self-spawning.
+
+### What happens technically
+
+Startup sequence:
+
+1. `index.js` loads `console_config.json` and resolves `embeddingExecutable`.
+2. It creates `<executable-name>_stdout.log` next to the executable.
+3. It spawns the executable as a child process.
+4. Child `stdout` is piped into that log file.
+5. Child `stderr` stays attached to the terminal (`inherit`).
+6. Launcher `stdin` is forwarded in raw mode to child `stdin` (including VT/mouse escape sequences).
+7. The embedded console runtime tails the log file and renders new output continuously.
+
+This means `node index.js` is the parent launcher process, while the configured executable is the process that actually hosts your real server/runtime behavior.
+
+### Data flow between processes
+
+- Keyboard and mouse input path: terminal -> launcher stdin -> child stdin.
+- Output path for normal logs: child stdout -> `<executable-name>_stdout.log` -> console tail reader -> UI buffer.
+- Error stream path: child stderr -> terminal directly.
+
+The launcher handles stdin backpressure by pausing terminal reads when child stdin buffers fill, then resuming on drain.
+
+### Lifecycle and limitations
+
+- No auto-restart: if the embedded executable exits or crashes, launcher mode exits too.
+- No reconnect flow: restart `node index.js` to start again.
+- Built-in commands (`help`, `toggle`, `exit`, etc.) are console-side commands, not a command tunnel to the child process protocol.
+- No prompt-detection protocol is implemented for the child process.
+- Launcher log cleanup is best-effort on shutdown (with retry on common Windows file lock errors).
+
+### Environment variables in launcher mode
+
+- `EMBEDDED_NATIVE_LOG`: path to the created stdout log file.
+- `TTY_LAUNCHER_MARKER`: debug marker used only when internal debug mode is enabled.
+
+### Troubleshooting
+
+- Executable not found: confirm `embeddingExecutable` is correct and resolvable from your environment.
+- No live output: check whether `<executable-name>_stdout.log` is created and growing.
+- Unexpected immediate exit: the launcher exits when the child process closes.
+- Input feels blocked: this may be temporary stdin backpressure handling while child stdin drains.
+
+## RageMP embedding example (`ragemp-server.exe`)
+
+Minimal config:
+
+```json
+{
+	"embeddingExecutable": "ragemp-server.exe"
+}
+```
+
+Run:
+
+```bash
+node index.js
+```
+
+Expected behavior:
+
+1. `node index.js` launches `ragemp-server.exe`.
+2. `ragemp-server_stdout.log` is created next to the executable.
+3. RageMP stdout is captured into that log and rendered live in the console UI.
+4. Terminal input is forwarded to the child process.
+5. When `ragemp-server.exe` exits, launcher mode exits as well.
+
+If you need direct API control (`new Console(...)`, `mp.tty`, `parseCommand`, etc.), use the in-process embedding model from the `Game Server Embedding` section instead.
+
 ## Module Consumers (CJS and ESM)
 
 CommonJS:
@@ -142,7 +261,8 @@ See `commands/README.md` for full details.
 	"variabled": {
 		"title": "Console",
 		"afkTimeoutSeconds": "300"
-	}
+	},
+	"embeddingExecutable": "ragemp-server.exe"
 }
 ```
 
@@ -150,7 +270,9 @@ See `commands/README.md` for full details.
 
 `afkEnabled` controls whether AFK timeout detection is active.
 
-The file is loaded on startup and saved by `toggle title`, `toggle wrap`, `toggle timestamps`, `toggle mouse`, and `toggle afk`.
+`embeddingExecutable` enables launcher mode. If empty or missing, `index.js` starts in normal local console mode.
+
+The file is loaded on startup and saved by `toggle title`, `toggle wrap`, `toggle timestamps`, `toggle mouse`, `toggle afk`, `set`, and `unset`.
 
 ## Persistent History
 
