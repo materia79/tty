@@ -2330,7 +2330,7 @@ class Console extends EventEmitter {
     const titleHeight = titleLines.length;
     const inputHeight = Math.min(inputLines.length, rows);
     const showBuffer = !(this.state.afkEnabled && this.state.isAfk);
-    const bufferRows = showBuffer ? Math.max(0, rows - titleHeight - inputHeight) : 0;
+    const bufferRows = Math.max(0, rows - titleHeight - inputHeight);
 
     return {
       cols,
@@ -2482,9 +2482,11 @@ class Console extends EventEmitter {
       this.titleBox.setContent(titleLines.map((line) => padToWidth(line, cols)).join("\n"));
     }
 
-    this.bufferBox.hidden = bufferRows === 0 || !showBuffer;
-    if (showBuffer && bufferRows > 0) {
-      const bufferLines = this.buildBufferViewport(cols, bufferRows, this.state.bufferScrollOffset);
+    this.bufferBox.hidden = bufferRows === 0;
+    if (bufferRows > 0) {
+      const bufferLines = showBuffer
+        ? this.buildBufferViewport(cols, bufferRows, this.state.bufferScrollOffset)
+        : Array.from({ length: bufferRows }, () => "");
       this.bufferBox.top = titleHeight;
       this.bufferBox.height = bufferRows;
       this.bufferBox.setContent(bufferLines.map((line) => padToWidth(line, cols)).join("\n"));
