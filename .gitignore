@@ -1,7 +1,4 @@
-console_config.json
-console_history.json
-node_modules/
-package-lock.json
+.npmrc
 commands/*
 !commands/cls.js
 !commands/exit.js
@@ -13,4 +10,20 @@ commands/*
 !commands/unset.js
 !commands/toggle.js
 !commands/README.md
-.npmrc
+console_config.json
+console_history.json
+node_modules/
+package-lock.json
+server.log
+
+# files to ignore for ragemp server
+conf.json
+ragemp-server.exe
+ragemp-server_stdout.log
+BugTrap-x64.dll
+bin
+maps/
+client_packages/
+packages/
+plugins/
+mouse_debug.log
