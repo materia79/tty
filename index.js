@@ -6,7 +6,6 @@ const EventEmitter = require("events");
 const childProcess = require("child_process");
 const fs = require("fs");
 const path = require("path");
-const os = require("os");
 
 const ANSI_PATTERN = /\u001b\[[0-?]*[ -/]*[@-~]/g;
 const DEFAULT_TITLE_NAME = "node-server";
@@ -27,7 +26,6 @@ const TTY_DEBUG_FILE = TTY_DEBUG_ACTIVE
   : "";
 let TTY_DEBUG_FILE_INITIALIZED = false;
 let TTY_DEBUG_FILE_ERROR_REPORTED = false;
-const TTY_LAUNCHER_MARKER = process.env.TTY_LAUNCHER_MARKER || "";
 
 function debugLog(scope, message, details) {
   if (!TTY_DEBUG_ACTIVE) {
@@ -289,16 +287,6 @@ function makeEvalFragment(expression) {
 class Console extends EventEmitter {
   constructor(options = {}) {
     super();
-
-    if (TTY_DEBUG_ENABLED && TTY_LAUNCHER_MARKER.length > 0) {
-      try {
-        process.stdout.write(
-          `[tty-embedded-boot marker=${TTY_LAUNCHER_MARKER} pid=${process.pid}]\n`
-        );
-      } catch {
-        // Ignore handshake write failures.
-      }
-    }
 
     debugLog("console", "constructor-start", {
       ppid: process.ppid,
@@ -1852,9 +1840,6 @@ class Console extends EventEmitter {
       name: data && typeof data.name === "string" ? data.name : null
     });
 
-    // Debug helper for future mouse/menu work:
-    // this.writeLog(`[mouse-debug] ${util.inspect(data, { depth: 6, breakLength: Infinity })}`, { timestamp: false });
-
     if (this.tryHandleWindowsRightClickPaste(data)) {
       mouseDebug(2, "handled-right-click-paste");
       return;
@@ -2523,12 +2508,8 @@ function launchEmbeddedHost() {
   });
 
   const env = { ...process.env, EMBEDDED_NATIVE_LOG: logPath };
-  if (TTY_DEBUG_ENABLED) {
-    env.TTY_LAUNCHER_MARKER = `launcher-${process.pid}-${Date.now()}`;
-  }
   debugLog("launcher", "spawn-env", {
     nativeLogPath: env.EMBEDDED_NATIVE_LOG,
-    launcherMarker: env.TTY_LAUNCHER_MARKER || null,
     stdinIsTTY: Boolean(process.stdin && process.stdin.isTTY),
     stdoutIsTTY: Boolean(process.stdout && process.stdout.isTTY),
     stderrIsTTY: Boolean(process.stderr && process.stderr.isTTY)
@@ -2644,10 +2625,6 @@ function launchEmbeddedHost() {
     }
 
     cleanupStarted = true;
-    if (embeddedMarkerWatchdog) {
-      clearTimeout(embeddedMarkerWatchdog);
-      embeddedMarkerWatchdog = null;
-    }
 
     debugLog("launcher", "cleanup", {
       logPath,
@@ -2716,28 +2693,9 @@ function launchEmbeddedHost() {
   process.once("SIGINT", () => handleSignal("SIGINT"));
   process.once("SIGTERM", () => handleSignal("SIGTERM"));
 
-  let sawEmbeddedBootMarker = false;
-  let embeddedMarkerWatchdog = null;
-  if (TTY_DEBUG_ENABLED && env.TTY_LAUNCHER_MARKER) {
-    embeddedMarkerWatchdog = setTimeout(() => {
-      if (!sawEmbeddedBootMarker) {
-        debugLog("launcher", "embedded-marker-timeout", {
-          marker: env.TTY_LAUNCHER_MARKER,
-          hint: "No embedded console boot marker seen. Embedding host may not be loading this index.js entrypoint."
-        });
-      }
-    }, 5000);
-  }
-
   child.stdout.on("data", (chunk) => {
-    const text = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk ?? "");
-    const chunkHasMarker = text.includes("[tty-embedded-boot marker=");
-    if (chunkHasMarker) {
-      sawEmbeddedBootMarker = true;
-    }
     debugLog("launcher", "child-stdout", {
-      bytes: Buffer.isBuffer(chunk) ? chunk.length : String(chunk ?? "").length,
-      sawEmbeddedBootMarker: chunkHasMarker
+      bytes: Buffer.isBuffer(chunk) ? chunk.length : String(chunk ?? "").length
     });
   });
 
