@@ -21,15 +21,16 @@ const TTY_DEBUG_MOUSE_LEVEL = (() => {
   }
   return Math.max(0, Math.floor(parsed));
 })();
-const TTY_DEBUG_FILE = TTY_DEBUG_ENABLED
-  ? (process.env.TTY_DEBUG_FILE || path.join(os.tmpdir(), `tty_debug_${process.pid}.log`))
+const TTY_DEBUG_ACTIVE = TTY_DEBUG_ENABLED || TTY_DEBUG_MOUSE_LEVEL > 0;
+const TTY_DEBUG_FILE = TTY_DEBUG_ACTIVE
+  ? (process.env.TTY_DEBUG_FILE || path.join(process.cwd(), "mouse_debug.log"))
   : "";
 let TTY_DEBUG_FILE_INITIALIZED = false;
 let TTY_DEBUG_FILE_ERROR_REPORTED = false;
 const TTY_LAUNCHER_MARKER = process.env.TTY_LAUNCHER_MARKER || "";
 
 function debugLog(scope, message, details) {
-  if (!TTY_DEBUG_ENABLED) {
+  if (!TTY_DEBUG_ACTIVE) {
     return;
   }
 
@@ -78,10 +79,6 @@ function debugLog(scope, message, details) {
 }
 
 function mouseDebug(level, message, details) {
-  if (!TTY_DEBUG_ENABLED) {
-    return;
-  }
-
   if (TTY_DEBUG_MOUSE_LEVEL < level) {
     return;
   }
@@ -89,7 +86,7 @@ function mouseDebug(level, message, details) {
   debugLog("mouse", message, details);
 }
 
-if (TTY_DEBUG_ENABLED) {
+if (TTY_DEBUG_ACTIVE) {
   try {
     process.stderr.write(`[tty-debug-file] path=${TTY_DEBUG_FILE}\n`);
   } catch {
@@ -454,6 +451,10 @@ class Console extends EventEmitter {
     this.boundWheelDown = () => this.handleWheel(-1);
     this.rawMousePending = "";
     this.lastParsedWheelAtMs = 0;
+    this.lastEmbeddedPageWheelAtMs = 0;
+    this.resizePollTimer = null;
+    this._lastKnownCols = 0;
+    this._lastKnownRows = 0;
     this.isWindowsTerminal =
       process.platform === "win32" &&
       Boolean(process.env.WT_SESSION || process.env.WT_PROFILE_ID);
@@ -722,6 +723,62 @@ class Console extends EventEmitter {
     this.bufferBox.on("wheelup", this.boundWheelUp);
     this.bufferBox.on("wheeldown", this.boundWheelDown);
     this.configureMouseTracking();
+
+    // In embedded mode, the launcher stdin relay consumes WINDOW_BUFFER_SIZE
+    // events from the console input queue, preventing SIGWINCH delivery to this
+    // process. Poll the dedicated TTY output for actual terminal dimensions.
+    if (this.nativeLogPath && this.dedicatedTtyOutput &&
+        typeof this.dedicatedTtyOutput.getWindowSize === "function") {
+      // Use _handle.getWindowSize() to get LIVE OS values. The public
+      // getWindowSize() returns cached .columns/.rows that are only refreshed
+      // on SIGWINCH — which never fires because our stdin is a pipe.
+      const _pollLiveSize = (stream) => {
+        if (stream._handle && typeof stream._handle.getWindowSize === "function") {
+          const out = [0, 0];
+          const err = stream._handle.getWindowSize(out);
+          if (err === 0) return out;
+        }
+        return stream.getWindowSize();
+      };
+      const initSize = _pollLiveSize(this.dedicatedTtyOutput);
+      this._lastKnownCols = initSize[0];
+      this._lastKnownRows = initSize[1];
+      debugLog("resize-poll", "started", {
+        cols: this._lastKnownCols,
+        rows: this._lastKnownRows,
+        outputIsTTY: Boolean(this.dedicatedTtyOutput.isTTY),
+        outputFd: typeof this.dedicatedTtyOutput.fd === "number" ? this.dedicatedTtyOutput.fd : null,
+        usesHandleDirect: Boolean(this.dedicatedTtyOutput._handle && typeof this.dedicatedTtyOutput._handle.getWindowSize === "function")
+      });
+      this.resizePollTimer = setInterval(() => {
+        if (this.state.destroyed || !this.dedicatedTtyOutput) return;
+        let size;
+        try { size = _pollLiveSize(this.dedicatedTtyOutput); } catch { return; }
+        const [cols, rows] = size;
+        if (cols !== this._lastKnownCols || rows !== this._lastKnownRows) {
+          debugLog("resize-poll", "detected", {
+            oldCols: this._lastKnownCols, oldRows: this._lastKnownRows,
+            newCols: cols, newRows: rows
+          });
+          this._lastKnownCols = cols;
+          this._lastKnownRows = rows;
+          this.dedicatedTtyOutput.columns = cols;
+          this.dedicatedTtyOutput.rows = rows;
+          if (this.screen && this.screen.program) {
+            this.screen.program.cols = cols;
+            this.screen.program.rows = rows;
+            this.screen.program.emit("resize");
+          }
+        }
+      }, 300);
+    } else {
+      debugLog("resize-poll", "skipped", {
+        nativeLogPath: this.nativeLogPath || null,
+        hasDedicatedTtyOutput: Boolean(this.dedicatedTtyOutput),
+        hasGetWindowSize: Boolean(this.dedicatedTtyOutput && typeof this.dedicatedTtyOutput.getWindowSize === "function")
+      });
+    }
+
     this.screen.key(["C-c"], () => this.stop());
 
     this.titleTimer = setInterval(() => {
@@ -992,6 +1049,11 @@ class Console extends EventEmitter {
     if (this.afkTimeoutHandle) {
       clearTimeout(this.afkTimeoutHandle);
       this.afkTimeoutHandle = null;
+    }
+
+    if (this.resizePollTimer) {
+      clearInterval(this.resizePollTimer);
+      this.resizePollTimer = null;
     }
 
     this.flushPendingConfigSave();
@@ -1701,11 +1763,19 @@ class Console extends EventEmitter {
     }
 
     if (key.name === "pageup") {
+      if (Date.now() - this.lastEmbeddedPageWheelAtMs <= 50) {
+        mouseDebug(2, "pageup-suppressed-after-embedded-wheel");
+        return;
+      }
       this.scrollBufferBy(this.getPageScrollStep());
       return;
     }
 
     if (key.name === "pagedown") {
+      if (Date.now() - this.lastEmbeddedPageWheelAtMs <= 50) {
+        mouseDebug(2, "pagedown-suppressed-after-embedded-wheel");
+        return;
+      }
       this.scrollBufferBy(-this.getPageScrollStep());
       return;
     }
@@ -1893,6 +1963,24 @@ class Console extends EventEmitter {
       this.handleWheel(direction);
       return "";
     });
+
+    // Some embedded Windows host chains forward wheel notches as page-up/page-down
+    // key-like CSI sequences instead of mouse reports. Treat those as wheel fallback
+    // only in embedding mode so wheel stays usable without breaking resize.
+    if (this.nativeLogPath) {
+      const pageLike = /(?:\x1b\[|\x9b)(5|6)~/g;
+      payload = payload.replace(pageLike, (match, code) => {
+        const direction = code === "5" ? 1 : -1;
+        const now = Date.now();
+        this.lastEmbeddedPageWheelAtMs = now;
+        mouseDebug(2, "wheel-via-raw-page-seq", {
+          sequence: match.replace(/\u001b/g, "<ESC>").replace(/\u009b/g, "<CSI>"),
+          direction
+        });
+        this.handleWheel(direction);
+        return "";
+      });
+    }
 
     let rebuilt = "";
     for (let i = 0; i < payload.length; i += 1) {
@@ -2446,10 +2534,10 @@ function launchEmbeddedHost() {
     stderrIsTTY: Boolean(process.stderr && process.stderr.isTTY)
   });
 
-  // Use "pipe" for stdout so native output is captured and forwarded to the
-  // log file. Use "pipe" for stdin so launcher can explicitly relay terminal
-  // input bytes (mouse/key sequences) to the embedded runtime.
-  // Keep stderr inherited as the blessed render target tty.
+  // Use "pipe" for stdin so the launcher can relay raw terminal input
+  // (including mouse sequences) that the host EXE would otherwise filter.
+  // Use "pipe" for stdout to capture native output to the log file.
+  // Keep stderr inherited so blessed can render to the real terminal.
   const child = childProcess.spawn(exePath, [], {
     stdio: ["pipe", "pipe", "inherit"],
     env,
@@ -2457,111 +2545,40 @@ function launchEmbeddedHost() {
   });
   debugLog("launcher", "spawn-called", { pid: child.pid || null });
 
-  let restoredParentRawMode = false;
-  let parentRawModeBeforeRelay = false;
-  let relayBackpressureActive = false;
-  const onRelayDrain = () => {
-    if (!relayBackpressureActive) {
-      return;
-    }
-
-    relayBackpressureActive = false;
-    if (process.stdin && typeof process.stdin.resume === "function") {
-      process.stdin.resume();
-    }
-  };
-  const onParentStdinData = (chunk) => {
-    if (!child.stdin || child.stdin.destroyed) {
-      return;
-    }
-
-    const wrote = child.stdin.write(chunk);
-    if (!wrote && !relayBackpressureActive) {
-      relayBackpressureActive = true;
-      if (process.stdin && typeof process.stdin.pause === "function") {
-        process.stdin.pause();
-      }
-    }
-  };
-  const onParentStdinEnd = () => {
-    if (!child.stdin || child.stdin.destroyed) {
-      return;
-    }
-
-    try {
-      child.stdin.end();
-    } catch {
-      // Ignore relay end failures.
-    }
-  };
-
-  if (child.stdin) {
-    child.stdin.on("drain", onRelayDrain);
-  }
-
-  if (process.stdin && typeof process.stdin.on === "function") {
-    process.stdin.on("data", onParentStdinData);
-    process.stdin.on("end", onParentStdinEnd);
-    if (typeof process.stdin.resume === "function") {
-      process.stdin.resume();
-    }
-
-    if (process.stdin.isTTY && typeof process.stdin.setRawMode === "function") {
-      parentRawModeBeforeRelay = Boolean(process.stdin.isRaw);
-      if (!parentRawModeBeforeRelay) {
-        try {
-          process.stdin.setRawMode(true);
-        } catch {
-          // Ignore raw-mode setup failures.
-        }
-      }
-    }
-  }
-
-  const restoreParentInputRelay = () => {
-    if (restoredParentRawMode) {
-      return;
-    }
-
-    restoredParentRawMode = true;
-
-    if (child.stdin) {
-      if (typeof child.stdin.off === "function") {
-        child.stdin.off("drain", onRelayDrain);
-      } else if (typeof child.stdin.removeListener === "function") {
-        child.stdin.removeListener("drain", onRelayDrain);
-      }
-    }
-
-    if (process.stdin) {
-      if (typeof process.stdin.off === "function") {
-        process.stdin.off("data", onParentStdinData);
-        process.stdin.off("end", onParentStdinEnd);
-      } else if (typeof process.stdin.removeListener === "function") {
-        process.stdin.removeListener("data", onParentStdinData);
-        process.stdin.removeListener("end", onParentStdinEnd);
-      }
-
-      if (
-        process.stdin.isTTY &&
-        typeof process.stdin.setRawMode === "function" &&
-        !parentRawModeBeforeRelay
-      ) {
-        try {
-          process.stdin.setRawMode(false);
-        } catch {
-          // Ignore raw-mode restore failures.
-        }
-      }
-
-      if (typeof process.stdin.pause === "function") {
-        process.stdin.pause();
-      }
-    }
-  };
-
   const logStream = fs.createWriteStream(logPath, { flags: "a" });
   child.stdout.pipe(logStream);
+
+  // Relay terminal stdin to child so raw VT mouse sequences reach the
+  // embedded runtime. The host EXE filters mouse input when it reads
+  // from the console directly, but passes pipe data through.
+  if (process.stdin && process.stdin.isTTY) {
+    try {
+      process.stdin.setRawMode(true);
+    } catch (err) {
+      debugLog("launcher", "stdin-setRawMode-failed", { message: err.message });
+    }
+  }
+  if (process.stdin && typeof process.stdin.on === "function") {
+    process.stdin.resume();
+    const onParentStdinData = (chunk) => {
+      if (!child.killed && child.stdin && child.stdin.writable) {
+        const ok = child.stdin.write(chunk);
+        if (!ok) {
+          process.stdin.pause();
+          child.stdin.once("drain", () => {
+            if (!child.killed) process.stdin.resume();
+          });
+        }
+      }
+    };
+    process.stdin.on("data", onParentStdinData);
+    child.on("exit", () => {
+      try { process.stdin.removeListener("data", onParentStdinData); } catch {}
+      if (process.stdin.isTTY) {
+        try { process.stdin.setRawMode(false); } catch {}
+      }
+    });
+  }
 
   let exitingViaSignal = false;
   let cleanupStarted = false;
@@ -2636,8 +2653,6 @@ function launchEmbeddedHost() {
       logPath,
       existsBeforeDelete: fs.existsSync(logPath)
     });
-
-    restoreParentInputRelay();
 
     try {
       child.stdout.unpipe(logStream);
