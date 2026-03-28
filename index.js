@@ -11,6 +11,8 @@ const ANSI_PATTERN = /\u001b\[[0-?]*[ -/]*[@-~]/g;
 const DEFAULT_TITLE_NAME = "node-server";
 const CONFIG_SAVE_DEBOUNCE_MS = 250;
 const DEFAULT_AFK_TIMEOUT_SECONDS = 300;
+const DEFAULT_REFRESH_INTERVAL_MS = 1000;
+const DEFAULT_AFK_REFRESH_INTERVAL_MS = 10000;
 const TTY_DEBUG_ENABLED = /^(1|true|yes|on)$/i.test(String(process.env.TTY_DEBUG || ""));
 const TTY_DEBUG_MOUSE_LEVEL = (() => {
   const raw = process.env.TTY_DEBUG_MOUSE_LEVEL || process.env.TTY_DEBUG_MOUSE || "0";
@@ -96,6 +98,15 @@ function normalizeAfkTimeoutSeconds(value) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric <= 0) {
     return DEFAULT_AFK_TIMEOUT_SECONDS;
+  }
+
+  return Math.max(1, Math.floor(numeric));
+}
+
+function normalizeRefreshIntervalMs(value, fallback) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return fallback;
   }
 
   return Math.max(1, Math.floor(numeric));
@@ -324,6 +335,14 @@ class Console extends EventEmitter {
       afkEnabled: options.afkEnabled ?? persistedConfig.afkEnabled ?? true,
       afkTimeoutSeconds: normalizeAfkTimeoutSeconds(
         options.afkTimeoutSeconds ?? persistedVariabled.afkTimeoutSeconds ?? persistedConfig.afkTimeoutSeconds
+      ),
+      refreshIntervalMs: normalizeRefreshIntervalMs(
+        options.refreshIntervalMs ?? persistedVariabled.refreshIntervalMs ?? persistedConfig.refreshIntervalMs,
+        DEFAULT_REFRESH_INTERVAL_MS
+      ),
+      afkRefreshIntervalMs: normalizeRefreshIntervalMs(
+        options.afkRefreshIntervalMs ?? persistedVariabled.afkRefreshIntervalMs ?? persistedConfig.afkRefreshIntervalMs,
+        DEFAULT_AFK_REFRESH_INTERVAL_MS
       )
     };
 
@@ -357,6 +376,8 @@ class Console extends EventEmitter {
       lastActivityAt: Date.now(),
       isAfk: false,
       afkTimeoutSeconds: this.options.afkTimeoutSeconds,
+      refreshIntervalMs: this.options.refreshIntervalMs,
+      afkRefreshIntervalMs: this.options.afkRefreshIntervalMs,
       bufferScrollOffset: 0,
       mouseCaptureEnabled: persistedConfig.mouseCaptureEnabled ?? true,
       pendingRender: false,
@@ -393,6 +414,12 @@ class Console extends EventEmitter {
       setAfkTimeoutSeconds: (seconds, persist = false) =>
         this.setAfkTimeoutSeconds(seconds, { persist }),
       getAfkTimeoutSeconds: () => this.state.afkTimeoutSeconds,
+      setRefreshIntervalMs: (value, persist = false) =>
+        this.setRefreshIntervalMs(value, { persist }),
+      getRefreshIntervalMs: () => this.state.refreshIntervalMs,
+      setAfkRefreshIntervalMs: (value, persist = false) =>
+        this.setAfkRefreshIntervalMs(value, { persist }),
+      getAfkRefreshIntervalMs: () => this.state.afkRefreshIntervalMs,
       setAfkEnabled: (enabled, persist = false) => this.setAfkEnabled(enabled, { persist }),
       getAfkEnabled: () => this.state.afkEnabled,
       getAfkState: () => (this.state.isAfk ? "afk" : "active"),
@@ -769,15 +796,7 @@ class Console extends EventEmitter {
 
     this.screen.key(["C-c"], () => this.stop());
 
-    this.titleTimer = setInterval(() => {
-      if (this.state.isAfk) {
-        return;
-      }
-
-      this.state.slashState = (this.state.slashState + 1) % this.state.slashRotate.length;
-      this.tty.slashState = this.state.slashState;
-      this.scheduleRender();
-    }, 1000);
+    this.restartTitleTimer();
 
     this.scheduleAfkTimeout();
 
@@ -847,7 +866,9 @@ class Console extends EventEmitter {
       afkEnabled: this.state.afkEnabled,
       variabled: {
         ...this.state.variabled,
-        afkTimeoutSeconds: String(this.state.afkTimeoutSeconds)
+        afkTimeoutSeconds: String(this.state.afkTimeoutSeconds),
+        refreshIntervalMs: String(this.state.refreshIntervalMs),
+        afkRefreshIntervalMs: String(this.state.afkRefreshIntervalMs)
       }
     };
 
@@ -1030,7 +1051,7 @@ class Console extends EventEmitter {
     this.state.destroyed = true;
 
     if (this.titleTimer) {
-      clearInterval(this.titleTimer);
+      clearTimeout(this.titleTimer);
       this.titleTimer = null;
     }
 
@@ -1113,8 +1134,36 @@ class Console extends EventEmitter {
     }
 
     this.state.isAfk = next;
+    this.restartTitleTimer();
     this.scheduleRender();
     return true;
+  }
+
+  getTitleRefreshIntervalMs() {
+    return this.state.isAfk ? this.state.afkRefreshIntervalMs : this.state.refreshIntervalMs;
+  }
+
+  restartTitleTimer() {
+    if (this.state.destroyed) {
+      return;
+    }
+
+    if (this.titleTimer) {
+      clearTimeout(this.titleTimer);
+      this.titleTimer = null;
+    }
+
+    this.titleTimer = setTimeout(() => {
+      this.titleTimer = null;
+      if (this.state.destroyed) {
+        return;
+      }
+
+      this.state.slashState = (this.state.slashState + 1) % this.state.slashRotate.length;
+      this.tty.slashState = this.state.slashState;
+      this.scheduleRender();
+      this.restartTitleTimer();
+    }, this.getTitleRefreshIntervalMs());
   }
 
   scheduleAfkTimeout() {
@@ -1237,6 +1286,18 @@ class Console extends EventEmitter {
       this.state.variabled.afkTimeoutSeconds = String(normalized);
       this.markActivity();
     }
+    if (key === "refreshIntervalMs") {
+      const normalized = normalizeRefreshIntervalMs(nextValue, DEFAULT_REFRESH_INTERVAL_MS);
+      this.state.refreshIntervalMs = normalized;
+      this.state.variabled.refreshIntervalMs = String(normalized);
+      this.restartTitleTimer();
+    }
+    if (key === "afkRefreshIntervalMs") {
+      const normalized = normalizeRefreshIntervalMs(nextValue, DEFAULT_AFK_REFRESH_INTERVAL_MS);
+      this.state.afkRefreshIntervalMs = normalized;
+      this.state.variabled.afkRefreshIntervalMs = String(normalized);
+      this.restartTitleTimer();
+    }
     if (options.persist) {
       this.scheduleConfigSave();
     }
@@ -1299,6 +1360,40 @@ class Console extends EventEmitter {
     }
 
     this.markActivity();
+    return true;
+  }
+
+  setRefreshIntervalMs(value, options = {}) {
+    const next = normalizeRefreshIntervalMs(value, DEFAULT_REFRESH_INTERVAL_MS);
+    if (next === this.state.refreshIntervalMs) {
+      return false;
+    }
+
+    this.state.refreshIntervalMs = next;
+    this.state.variabled.refreshIntervalMs = String(next);
+    if (options.persist) {
+      this.scheduleConfigSave();
+    }
+
+    this.restartTitleTimer();
+    this.scheduleRender();
+    return true;
+  }
+
+  setAfkRefreshIntervalMs(value, options = {}) {
+    const next = normalizeRefreshIntervalMs(value, DEFAULT_AFK_REFRESH_INTERVAL_MS);
+    if (next === this.state.afkRefreshIntervalMs) {
+      return false;
+    }
+
+    this.state.afkRefreshIntervalMs = next;
+    this.state.variabled.afkRefreshIntervalMs = String(next);
+    if (options.persist) {
+      this.scheduleConfigSave();
+    }
+
+    this.restartTitleTimer();
+    this.scheduleRender();
     return true;
   }
 
@@ -1690,7 +1785,9 @@ class Console extends EventEmitter {
 
     this.appendToServerLog(nextEntry.raw);
 
-    this.scheduleRender();
+    if (!this.state.isAfk || !this.state.afkEnabled) {
+      this.scheduleRender();
+    }
   }
 
   scheduleRender() {
@@ -2232,7 +2329,8 @@ class Console extends EventEmitter {
     const inputLines = this.buildInputLines(cols);
     const titleHeight = titleLines.length;
     const inputHeight = Math.min(inputLines.length, rows);
-    const bufferRows = Math.max(0, rows - titleHeight - inputHeight);
+    const showBuffer = !(this.state.afkEnabled && this.state.isAfk);
+    const bufferRows = showBuffer ? Math.max(0, rows - titleHeight - inputHeight) : 0;
 
     return {
       cols,
@@ -2241,7 +2339,8 @@ class Console extends EventEmitter {
       inputLines,
       titleHeight,
       inputHeight,
-      bufferRows
+      bufferRows,
+      showBuffer
     };
   }
 
@@ -2370,7 +2469,8 @@ class Console extends EventEmitter {
       inputLines,
       titleHeight,
       inputHeight,
-      bufferRows
+      bufferRows,
+      showBuffer
     } = this.getBufferRenderContext();
 
     this.setBufferScrollOffset(this.state.bufferScrollOffset, cols, bufferRows);
@@ -2382,9 +2482,9 @@ class Console extends EventEmitter {
       this.titleBox.setContent(titleLines.map((line) => padToWidth(line, cols)).join("\n"));
     }
 
-    const bufferLines = this.buildBufferViewport(cols, bufferRows, this.state.bufferScrollOffset);
-    this.bufferBox.hidden = bufferRows === 0;
-    if (bufferRows > 0) {
+    this.bufferBox.hidden = bufferRows === 0 || !showBuffer;
+    if (showBuffer && bufferRows > 0) {
+      const bufferLines = this.buildBufferViewport(cols, bufferRows, this.state.bufferScrollOffset);
       this.bufferBox.top = titleHeight;
       this.bufferBox.height = bufferRows;
       this.bufferBox.setContent(bufferLines.map((line) => padToWidth(line, cols)).join("\n"));
