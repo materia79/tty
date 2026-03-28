@@ -310,8 +310,8 @@ class Console extends EventEmitter {
     });
 
     const configuredCommandsDir = options.commandsDir ?? path.join(__dirname, "commands");
-    this.configPath = options.configPath ?? path.join(__dirname, "console_config.json");
-    this.historyPath = options.historyPath ?? path.join(__dirname, "console_history.json");
+    this.configPath = options.configPath ?? path.join(process.cwd(), "console_config.json");
+    this.historyPath = options.historyPath ?? path.join(process.cwd(), "console_history.json");
     this.commandsDir = path.isAbsolute(configuredCommandsDir)
       ? configuredCommandsDir
       : path.resolve(process.cwd(), configuredCommandsDir);
@@ -2106,7 +2106,7 @@ class Console extends EventEmitter {
 
     const beforeOffset = this.state.bufferScrollOffset;
 
-    const step = 3;
+    const step = 1;
     this.scrollBufferBy(direction * step);
 
     mouseDebug(1, "handleWheel", {
