@@ -29,7 +29,13 @@
     "console",
     "tty",
     "terminal",
-    "node"
+    "node",
+    "cli",
+    "tui",
+    "blessed",
+    "command-parser",
+    "repl",
+    "runtime"
   ],
   "scripts": {
     "start": "node index.js"
