@@ -21,6 +21,7 @@ Terminal UI console for Node 20+ server apps with:
 
 - [Install](#install)
 - [Run demo](#run-demo)
+- [Dummy C heartbeat server](#dummy-c-heartbeat-server)
 - [Built-in commands](#built-in-commands)
 - [Integration](#integration)
 - [Game Server Embedding](#game-server-embedding)
