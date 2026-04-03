@@ -29,18 +29,23 @@
     "console",
     "tty",
     "terminal",
-    "node",
     "cli",
     "tui",
-    "blessed",
+    "terminal",
+    "console-log",
     "command-parser",
     "repl",
-    "runtime"
+    "runtime",
+    "node",
+    "blessed"
   ],
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
     "neo-blessed": "^0.2.0"
+  },
+  "devDependencies": {
+    "node-pty": "^1.1.0"
   }
 }
