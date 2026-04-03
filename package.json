@@ -1,8 +1,14 @@
 {
   "name": "tty-console",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Terminal console runtime for Node servers with command parsing and embeddable API",
   "private": false,
+  "author": "Simon <simon@istaria.de>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/materia79/tty.git"
+  },
   "main": "index.js",
   "exports": {
     ".": {
