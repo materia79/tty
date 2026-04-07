@@ -146,6 +146,11 @@ function ensureAnsiResetAtEnd(text) {
   return `${base}\u001b[0m${trailingWhitespace}`;
 }
 
+function splitPhysicalRows(text) {
+  const normalized = String(text ?? "").replace(/\r\n|\r/g, "\n");
+  return normalized.split("\n");
+}
+
 function wrapPlainLine(text, width) {
   const input = String(text ?? "");
   if (width <= 0) {
@@ -267,6 +272,14 @@ function wrapAnsi(text, width) {
   }
 
   return out.length > 0 ? out : [""];
+}
+
+function wrapDisplayRow(text, width, treatAsAnsi) {
+  if (treatAsAnsi) {
+    return wrapAnsiLine(text, width);
+  }
+
+  return wrapPlainLine(text, width);
 }
 
 function padToWidth(text, width) {
@@ -441,6 +454,8 @@ class Console extends EventEmitter {
     this.originalStderrWrite = null;
     this.stdoutPending = "";
     this.stderrPending = "";
+    this.nextBufferEntryId = 1;
+    this.nextBufferGroupId = 1;
     this.suppressExternalStreamInterception = false;
     this.hasRenderedOnce = false;
     this.isRendering = false;
@@ -1762,15 +1777,29 @@ class Console extends EventEmitter {
         ? `${this.getLogTimestamp()} ${text}`
         : text;
     const normalized = ensureAnsiResetAtEnd(withTimestamp);
-    const nextEntry = {
-      raw: normalized,
-      plain: stripAnsi(normalized)
-    };
-    this.state.buffer.push(nextEntry);
+    const groupId = this.nextBufferGroupId;
+    this.nextBufferGroupId += 1;
+    const rows = splitPhysicalRows(normalized);
+    const nextEntries = rows.map((row, rowIndex) => {
+      const entryId = this.nextBufferEntryId;
+      this.nextBufferEntryId += 1;
+      return {
+        id: entryId,
+        groupId,
+        rowIndex,
+        rowCount: rows.length,
+        raw: row,
+        plain: stripAnsi(row)
+      };
+    });
 
-    const addedVisibleLines = keepViewportStable
-      ? this.getVisibleLineCountForEntry(nextEntry, cols)
-      : 0;
+    let addedVisibleLines = 0;
+    for (const entry of nextEntries) {
+      this.state.buffer.push(entry);
+      if (keepViewportStable) {
+        addedVisibleLines += this.getVisibleLineCountForEntry(entry, cols);
+      }
+    }
 
     while (this.state.buffer.length > this.options.maxBufferLines) {
       this.state.buffer.shift();
@@ -1783,7 +1812,7 @@ class Console extends EventEmitter {
       );
     }
 
-    this.appendToServerLog(nextEntry.raw);
+    this.appendToServerLog(normalized);
 
     if (!this.state.isAfk || !this.state.afkEnabled) {
       this.scheduleRender();
@@ -2287,39 +2316,107 @@ class Console extends EventEmitter {
     }
 
     const display = typeof entry.raw === "string" ? entry.raw : entry.plain;
-    if (hasAnsi(display)) {
-      return wrapAnsi(display, cols).length;
+    return wrapDisplayRow(display, cols, hasAnsi(display)).length;
+  }
+
+  buildDisplayLineRecordsForEntry(entry, cols) {
+    const display = typeof entry.raw === "string" ? entry.raw : entry.plain;
+    const parentEntryId = Number.isFinite(entry?.id) ? entry.id : null;
+    const groupId = Number.isFinite(entry?.groupId) ? entry.groupId : null;
+    const rowIndex = Number.isFinite(entry?.rowIndex) ? entry.rowIndex : null;
+    const rowCount = Number.isFinite(entry?.rowCount) ? entry.rowCount : null;
+
+    if (!this.state.wrapEnabled) {
+      const visibleRow = wrapDisplayRow(display, cols, hasAnsi(display))[0] ?? "";
+      return [{
+        text: visibleRow,
+        fullText: display,
+        parentEntryId,
+        groupId,
+        rowIndex,
+        rowCount,
+        softWrapIndex: 0,
+        softWrapCount: 1,
+        previousSoftWrapLineId: null,
+        nextSoftWrapLineId: null,
+        isSoftWrappedContinuation: false
+      }];
     }
 
-    return wrapPlain(display, cols).length;
+    const wrappedLines = wrapDisplayRow(display, cols, hasAnsi(display));
+    const softWrapCount = wrappedLines.length;
+
+    return wrappedLines.map((line, softWrapIndex) => {
+      const selfId = parentEntryId === null
+        ? null
+        : `${parentEntryId}:${softWrapIndex}`;
+
+      return {
+        text: line,
+        parentEntryId,
+        groupId,
+        rowIndex,
+        rowCount,
+        softWrapIndex,
+        softWrapCount,
+        previousSoftWrapLineId: softWrapIndex > 0 && parentEntryId !== null
+          ? `${parentEntryId}:${softWrapIndex - 1}`
+          : null,
+        nextSoftWrapLineId: softWrapIndex < softWrapCount - 1 && parentEntryId !== null
+          ? `${parentEntryId}:${softWrapIndex + 1}`
+          : null,
+        isSoftWrappedContinuation: softWrapIndex > 0,
+        lineId: selfId
+      };
+    });
   }
 
   buildDisplayLinesForEntry(entry, cols) {
-    const display = typeof entry.raw === "string" ? entry.raw : entry.plain;
+    return this.buildDisplayLineRecordsForEntry(entry, cols).map((record) => record.text);
+  }
 
-    if (hasAnsi(display)) {
-      if (this.state.wrapEnabled) {
-        return wrapAnsi(display, cols);
-      }
+  buildBufferLineRecords(cols) {
+    const records = [];
 
-      return [wrapAnsi(display, cols)[0]];
+    for (const entry of this.state.buffer) {
+      records.push(...this.buildDisplayLineRecordsForEntry(entry, cols));
     }
 
-    if (this.state.wrapEnabled) {
-      return wrapPlain(display, cols);
+    return records;
+  }
+
+  buildBufferViewportRecords(cols, rows, scrollOffset = 0) {
+    if (rows <= 0) {
+      return [];
     }
 
-    return [wrapPlain(display, cols)[0]];
+    const allLineRecords = this.buildBufferLineRecords(cols);
+    const maxOffset = Math.max(0, allLineRecords.length - rows);
+    const clampedOffset = Math.max(0, Math.min(maxOffset, scrollOffset));
+    const start = Math.max(0, allLineRecords.length - rows - clampedOffset);
+    const out = allLineRecords.slice(start, start + rows);
+
+    while (out.length < rows) {
+      out.unshift({
+        text: "",
+        parentEntryId: null,
+        groupId: null,
+        rowIndex: null,
+        rowCount: null,
+        softWrapIndex: 0,
+        softWrapCount: 1,
+        previousSoftWrapLineId: null,
+        nextSoftWrapLineId: null,
+        isSoftWrappedContinuation: false,
+        lineId: null
+      });
+    }
+
+    return out;
   }
 
   buildBufferLines(cols) {
-    const lines = [];
-
-    for (const entry of this.state.buffer) {
-      lines.push(...this.buildDisplayLinesForEntry(entry, cols));
-    }
-
-    return lines;
+    return this.buildBufferLineRecords(cols).map((record) => record.text);
   }
 
   getBufferRenderContext() {
@@ -2417,21 +2514,7 @@ class Console extends EventEmitter {
   }
 
   buildBufferViewport(cols, rows, scrollOffset = 0) {
-    if (rows <= 0) {
-      return [];
-    }
-
-    const allLines = this.buildBufferLines(cols);
-    const maxOffset = Math.max(0, allLines.length - rows);
-    const clampedOffset = Math.max(0, Math.min(maxOffset, scrollOffset));
-    const start = Math.max(0, allLines.length - rows - clampedOffset);
-    const out = allLines.slice(start, start + rows);
-
-    while (out.length < rows) {
-      out.unshift("");
-    }
-
-    return out;
+    return this.buildBufferViewportRecords(cols, rows, scrollOffset).map((record) => record.text);
   }
 
   moveCursor(rows, cols, inputLines) {

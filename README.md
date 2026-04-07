@@ -17,6 +17,17 @@ Terminal UI console for Node 20+ server apps with:
 - Persistent AFK timeout config (`variabled.afkTimeoutSeconds`) in `console_config.json`
 - Persistent input history in `console_history.json` (last 1000 entries)
 
+## Demo
+
+<p align="center">
+  <a href="https://materia79.github.io/media/console.mp4" title="Click to open the demo video">
+    <img src="https://materia79.github.io/media/console.png" alt="TTY console demo preview" width="720">
+  </a>
+</p>
+<p align="center">
+  <sub>Click the preview image to open the demo video.</sub>
+</p>
+
 ## Index
 
 - [Install](#install)
