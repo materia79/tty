@@ -322,12 +322,14 @@ class Console extends EventEmitter {
       stderrIsTTY: Boolean(process.stderr && process.stderr.isTTY)
     });
 
-    const configuredCommandsDir = options.commandsDir ?? path.join(__dirname, "commands");
+    const rawCommandsDir = options.commandsDir ?? path.join(__dirname, "commands");
+    const commandsDirList = Array.isArray(rawCommandsDir) ? rawCommandsDir : [rawCommandsDir];
+    this.commandsDirs = commandsDirList.map((dir) => {
+      const entry = String(dir ?? "");
+      return path.isAbsolute(entry) ? entry : path.resolve(process.cwd(), entry);
+    });
     this.configPath = options.configPath ?? path.join(process.cwd(), "console_config.json");
     this.historyPath = options.historyPath ?? path.join(process.cwd(), "console_history.json");
-    this.commandsDir = path.isAbsolute(configuredCommandsDir)
-      ? configuredCommandsDir
-      : path.resolve(process.cwd(), configuredCommandsDir);
     this.maxHistoryEntries = options.maxHistoryEntries ?? 1000;
     this.exitOnStop = options.exitOnStop ?? true;
     const persistedConfig = this.loadConfig();
@@ -984,22 +986,23 @@ class Console extends EventEmitter {
     this.state.commands = {};
     const ungroupedHelpEntries = [];
     const groupedHelpEntries = new Map();
+    let loadedAnyDir = false;
 
-    if (!fs.existsSync(this.commandsDir)) {
-      this.state.helpText = "No commands directory found.";
-      this.tty.commands = this.state.commands;
-      this.tty.help = this.state.helpText;
-      return;
-    }
+    for (const dir of this.commandsDirs) {
+      if (!fs.existsSync(dir)) {
+        continue;
+      }
+
+      loadedAnyDir = true;
 
     const files = fs
-      .readdirSync(this.commandsDir)
+        .readdirSync(dir)
       .filter((name) => name.endsWith(".js"))
       .sort();
 
     for (const filename of files) {
       const commandName = filename.slice(0, -3).toLowerCase();
-      const fullPath = path.resolve(this.commandsDir, filename);
+        const fullPath = path.resolve(dir, filename);
       let commandModule;
 
       try {
@@ -1015,6 +1018,22 @@ class Console extends EventEmitter {
       }
 
       this.state.commands[commandName] = commandModule.cmd;
+
+        // Remove any prior help entry for this command name so that
+        // later directories cleanly override earlier ones.
+        const existingUngrouped = ungroupedHelpEntries.findIndex(
+          (e) => e.commandName === commandName
+        );
+        if (existingUngrouped !== -1) {
+          ungroupedHelpEntries.splice(existingUngrouped, 1);
+        }
+        for (const entries of groupedHelpEntries.values()) {
+          const idx = entries.findIndex((e) => e.commandName === commandName);
+          if (idx !== -1) {
+            entries.splice(idx, 1);
+          }
+        }
+
       if (typeof commandModule.help === "string" && commandModule.help.length > 0) {
         const helpLine = commandModule.help.replace(/\s+$/, "");
         const groupName =
@@ -1031,6 +1050,14 @@ class Console extends EventEmitter {
 
         groupedHelpEntries.get(groupName).push({ commandName, helpLine });
       }
+      }
+    }
+
+    if (!loadedAnyDir) {
+      this.state.helpText = "No commands directory found.";
+      this.tty.commands = this.state.commands;
+      this.tty.help = this.state.helpText;
+      return;
     }
 
     ungroupedHelpEntries.sort((a, b) => a.commandName.localeCompare(b.commandName));

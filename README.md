@@ -246,6 +246,28 @@ At startup the console scans `commands/` for `.js` files and registers them as c
 - Optional `help` text is aggregated and displayed by `help`
 - Command handlers can be sync or async
 
+`commandsDir` accepts a string (single directory) or an array of strings (multiple directories):
+
+```js
+// Single directory (default behavior, backward compatible)
+const ui = createConsole({ commandsDir: "./commands" });
+
+// Multiple directories — later entries override earlier ones on name collision
+const { Console } = require("tty-console");
+const path = require("path");
+
+const ui = new Console({
+	commandsDir: [
+		path.join(__dirname, "node_modules/tty-console/commands"), // loaded first
+		path.join(__dirname, "commands") // loaded second, overrides duplicates
+	]
+});
+```
+
+**Important:** when `commandsDir` is an array, folders are processed in the exact order they appear. If two folders provide the same command name, the later folder in the array overwrites the earlier one.
+
+Non-existent directories in the array are silently skipped. If none of the listed directories exist, the help text shows "No commands directory found."
+
 Command handler signature:
 
 ```js
