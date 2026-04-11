@@ -2,20 +2,34 @@
 
 Terminal UI console for Node 20+ server apps with:
 
-- Dynamic title row (updates every second)
-- AFK detector with configurable inactivity timeout shown in title state
-- Buffer viewport in the middle that always uses remaining space
-- Scrollback navigation (PageUp/PageDown, Home/End with empty input, mouse wheel)
-- Bottom input anchored to terminal bottom with multiline soft-wrap
-- ANSI-decolor-aware line measurement for sizing/wrapping
+- Dynamic title row with (optional) uptime, CPU/memory usage, AFK state, mouse mode, and **custom fragments**
+- AFK detector with configurable inactivity timeout to disable rendering while the terminal is idle
+- **Buffer viewport** with auto-scroll on new logs when at live bottom
+- **Scrollback navigation** (PageUp/PageDown, Home/End with empty input, mouse wheel)
+- Bottom input anchored to terminal bottom with **multiline soft-wrap**
+- ANSI-decolor-aware line measurement for sizing/**wrapping**
 - UTC timestamps on log lines with runtime seconds to hundredths
 - `console.log` interception (`console._log` keeps original)
-- Prefix history navigation (`type prefix`, then ArrowUp/ArrowDown)
+- **Prefix history navigation** (`type prefix`, then ArrowUp/ArrowDown)
 - Retained output buffer capped at 5000 log entries by default
-- Command loader from `commands/*.js`
+- Command loader with grouped **help system** from one or more command folders (`commandsDir` supports a string or ordered array)
 - Persistent title/wrap/timestamps config in `console_config.json`
 - Persistent AFK timeout config (`variabled.afkTimeoutSeconds`) in `console_config.json`
-- Persistent input history in `console_history.json` (last 1000 entries)
+- **Persistent input history** in `console_history.json` (last 1000 entries)
+
+<p style="margin-left: 5vh;">
+  <a href="https://www.npmjs.com/package/tty-console">
+    <img src="https://img.shields.io/badge/npm-package-CB3837?logo=npm&logoColor=white" alt="npm package">
+  </a>
+  &nbsp;&nbsp;
+  <a href="https://github.com/materia79/tty">
+    <img src="https://img.shields.io/badge/GitHub-repo-181717?logo=github&logoColor=white" alt="GitHub repo">
+  </a>
+  &nbsp;&nbsp;
+  <a href="https://www.npmjs.com/package/tty-console">
+    <img src="https://img.shields.io/npm/v/tty-console?label=version" alt="current version">
+  </a>
+</p>
 
 ## Demo
 

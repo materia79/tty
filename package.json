@@ -1,6 +1,6 @@
 {
   "name": "tty-console",
-  "version": "0.1.2",
+  "version": "1.0.3",
   "description": "Terminal console runtime for Node servers with command parsing and embeddable API",
   "private": false,
   "author": "Simon <simon@istaria.de>",
