@@ -101,6 +101,23 @@ global.tty = ui.tty;
 console.log("server started");
 ```
 
+### Hiding title segments
+
+Individual title segments can be suppressed with `createConsole` flags:
+
+```js
+const ui = createConsole({
+	hideTitleName: true,   // remove the title name (e.g. "node-server")
+	hideTitleUptime: true, // remove "up: …"
+	hideTitleCPU: true,    // remove "CPU: …"
+	hideTitleMem: true,    // remove "Mem: …"
+	hideTitleAfk: true,    // remove "state: …"
+	hideTitleMouse: true   // remove "mouse: …"
+}).start();
+```
+
+All flags default to `false` (every segment shown). The spinner is always present.
+
 ## Game Server Embedding
 
 For embedded usage (for example in a game server), create one `Console` instance and assign its public context to your host object.

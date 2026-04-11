@@ -358,7 +358,13 @@ class Console extends EventEmitter {
       afkRefreshIntervalMs: normalizeRefreshIntervalMs(
         options.afkRefreshIntervalMs ?? persistedVariabled.afkRefreshIntervalMs ?? persistedConfig.afkRefreshIntervalMs,
         DEFAULT_AFK_REFRESH_INTERVAL_MS
-      )
+      ),
+      hideTitleName: Boolean(options.hideTitleName),
+      hideTitleUptime: Boolean(options.hideTitleUptime),
+      hideTitleCPU: Boolean(options.hideTitleCPU),
+      hideTitleMem: Boolean(options.hideTitleMem),
+      hideTitleAfk: Boolean(options.hideTitleAfk),
+      hideTitleMouse: Boolean(options.hideTitleMouse)
     };
 
     this.state = {
@@ -995,29 +1001,29 @@ class Console extends EventEmitter {
 
       loadedAnyDir = true;
 
-    const files = fs
+      const files = fs
         .readdirSync(dir)
-      .filter((name) => name.endsWith(".js"))
-      .sort();
+        .filter((name) => name.endsWith(".js"))
+        .sort();
 
-    for (const filename of files) {
-      const commandName = filename.slice(0, -3).toLowerCase();
+      for (const filename of files) {
+        const commandName = filename.slice(0, -3).toLowerCase();
         const fullPath = path.resolve(dir, filename);
-      let commandModule;
+        let commandModule;
 
-      try {
-        delete require.cache[require.resolve(fullPath)];
-        commandModule = require(fullPath);
-      } catch (error) {
-        this.writeLog(`Failed to load command ${commandName}: ${error.message}`);
-        continue;
-      }
+        try {
+          delete require.cache[require.resolve(fullPath)];
+          commandModule = require(fullPath);
+        } catch (error) {
+          this.writeLog(`Failed to load command ${commandName}: ${error.message}`);
+          continue;
+        }
 
-      if (!commandModule || typeof commandModule.cmd !== "function") {
-        continue;
-      }
+        if (!commandModule || typeof commandModule.cmd !== "function") {
+          continue;
+        }
 
-      this.state.commands[commandName] = commandModule.cmd;
+        this.state.commands[commandName] = commandModule.cmd;
 
         // Remove any prior help entry for this command name so that
         // later directories cleanly override earlier ones.
@@ -1034,22 +1040,22 @@ class Console extends EventEmitter {
           }
         }
 
-      if (typeof commandModule.help === "string" && commandModule.help.length > 0) {
-        const helpLine = commandModule.help.replace(/\s+$/, "");
-        const groupName =
-          typeof commandModule.group === "string" ? commandModule.group.trim() : "";
+        if (typeof commandModule.help === "string" && commandModule.help.length > 0) {
+          const helpLine = commandModule.help.replace(/\s+$/, "");
+          const groupName =
+            typeof commandModule.group === "string" ? commandModule.group.trim() : "";
 
-        if (groupName.length === 0) {
-          ungroupedHelpEntries.push({ commandName, helpLine });
-          continue;
+          if (groupName.length === 0) {
+            ungroupedHelpEntries.push({ commandName, helpLine });
+            continue;
+          }
+
+          if (!groupedHelpEntries.has(groupName)) {
+            groupedHelpEntries.set(groupName, []);
+          }
+
+          groupedHelpEntries.get(groupName).push({ commandName, helpLine });
         }
-
-        if (!groupedHelpEntries.has(groupName)) {
-          groupedHelpEntries.set(groupName, []);
-        }
-
-        groupedHelpEntries.get(groupName).push({ commandName, helpLine });
-      }
       }
     }
 
@@ -1149,24 +1155,36 @@ class Console extends EventEmitter {
     this.state.titleFooter.length = 0;
 
     this.state.titleHeader.push(() => `[${this.state.slashRotate[this.state.slashState]}]`);
-    this.state.titleHeader.push(() => {
-      const configuredTitle =
-        typeof this.state.variabled.title === "undefined"
-          ? ""
-          : String(this.state.variabled.title ?? "").trim();
+    if (!this.options.hideTitleName) {
+      this.state.titleHeader.push(() => {
+        const configuredTitle =
+          typeof this.state.variabled.title === "undefined"
+            ? ""
+            : String(this.state.variabled.title ?? "").trim();
 
-      return configuredTitle.length > 0 ? configuredTitle : DEFAULT_TITLE_NAME;
-    });
+        return configuredTitle.length > 0 ? configuredTitle : DEFAULT_TITLE_NAME;
+      });
+    }
 
-    this.state.titleFooter.push(() => `${this.state.delimiter}up: ${this.getUptime()}`);
-    this.state.titleFooter.push(() => `${this.state.delimiter}CPU: ${this.getCPUUsage()}%`);
-    this.state.titleFooter.push(() => `${this.state.delimiter}Mem: ${this.getMemUsage()}`);
-    this.state.titleFooter.push(
-      () => `${this.state.delimiter}state: ${this.state.afkEnabled ? (this.state.isAfk ? "AFK" : "active") : "disabled"}`
-    );
-    this.state.titleFooter.push(
-      () => `${this.state.delimiter}mouse: ${this.state.mouseCaptureEnabled ? "app" : "native"}`
-    );
+    if (!this.options.hideTitleUptime) {
+      this.state.titleFooter.push(() => `${this.state.delimiter}up: ${this.getUptime()}`);
+    }
+    if (!this.options.hideTitleCPU) {
+      this.state.titleFooter.push(() => `${this.state.delimiter}CPU: ${this.getCPUUsage()}%`);
+    }
+    if (!this.options.hideTitleMem) {
+      this.state.titleFooter.push(() => `${this.state.delimiter}Mem: ${this.getMemUsage()}`);
+    }
+    if (!this.options.hideTitleAfk) {
+      this.state.titleFooter.push(
+        () => `${this.state.delimiter}state: ${this.state.afkEnabled ? (this.state.isAfk ? "AFK" : "active") : "disabled"}`
+      );
+    }
+    if (!this.options.hideTitleMouse) {
+      this.state.titleFooter.push(
+        () => `${this.state.delimiter}mouse: ${this.state.mouseCaptureEnabled ? "app" : "native"}`
+      );
+    }
   }
 
   setAfkState(isAfk) {
